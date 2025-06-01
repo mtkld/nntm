@@ -1,0 +1,4 @@
+make         # builds ./nntm
+sudo make install  # installs to /usr/bin/nntm
+make clean   # removes nntm binary
+
