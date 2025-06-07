@@ -10,6 +10,7 @@
 #include <locale.h>
 #include <ncurses.h>
 #include <poll.h>
+#include <signal.h> // for sig_atomic_t
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,11 +67,12 @@ static const char *exec_script = NULL;
 
 bool auto_scroll_enabled = true;
 
-static pthread_mutex_t screen_mu = PTHREAD_MUTEX_INITIALIZER;
-
 // For our streaming by pipe functionality, mutex for thread safety
 bool streaming_mode        = false;
 pthread_mutex_t todo_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+volatile sig_atomic_t need_redraw = 0;
+int wakeup_pipe[ 2 ]; // [0] read, [1] write
 
 static void run_exec_hook( const char *prefix, const char *text )
 {
@@ -885,16 +887,37 @@ static void draw_ui( void )
             attroff( text_attr );
             ++row;
       }
+      // Fix that it wont go to the very bottom on auto scroll
+      if ( auto_scroll_enabled )
+      {
+            int visible =
+                count_visible_items_for_type( types[ selected_type ] );
+
+            count_visible_items_for_type( types[ selected_type ] );
+            if ( selected_index >= visible )
+                  selected_index = visible - 1;
+
+            if ( visible > visible_lines )
+            {
+                  scroll_offset = visible - visible_lines;
+            }
+            else
+            {
+                  scroll_offset = 0;
+            }
+      }
+
+      ////
 
       wnoutrefresh( stdscr );
       doupdate();
 }
 static inline void safe_draw_ui( void )
 {
-      pthread_mutex_lock( &screen_mu );
-      draw_ui();
-      pthread_mutex_unlock( &screen_mu );
+      need_redraw = 1;
+      write( wakeup_pipe[ 1 ], "x", 1 ); // wake up UI thread
 }
+
 /* ──────────────────────────────────────────────── funcs, streaming, by pipe ──
  */
 
@@ -1259,8 +1282,31 @@ void *pipe_reader_thread( void *arg )
 static void ui_loop( void )
 {
 
-      for ( int ch; ( ch = getch() ) != 'q'; )
+      struct pollfd fds[ 2 ] = { { STDIN_FILENO, POLLIN, 0 },
+                                 { wakeup_pipe[ 0 ], POLLIN, 0 } };
+
+      while ( 1 )
       {
+            poll( fds, 2, -1 ); // wait for key or redraw signal
+
+            if ( fds[ 1 ].revents & POLLIN )
+            {
+                  char buf[ 8 ];
+                  read( wakeup_pipe[ 0 ], buf, sizeof( buf ) ); // clear wakeup
+            }
+
+            if ( need_redraw )
+            {
+                  draw_ui();
+                  need_redraw = 0;
+            }
+
+            if ( !( fds[ 0 ].revents & POLLIN ) )
+                  continue;
+
+            int ch = getch();
+            if ( ch == 'q' )
+                  break;
 
             if ( show_help )
             {
@@ -1474,6 +1520,13 @@ int main( int argc, char **argv )
       //-- end of streaming functionality
 
       setlocale( LC_ALL, "" );
+
+      if ( pipe( wakeup_pipe ) == -1 )
+      {
+            perror( "pipe" );
+            exit( 1 );
+      }
+
       initscr();
       curs_set( 0 );
       noecho();
