@@ -94,16 +94,53 @@ static void broadcast( const char *buf, size_t len )
 {
       size_t fanout = 0;
       for ( int i = 0; i < MAX_CLIENTS; ++i )
+      {
             if ( clients[ i ].active && clients[ i ].is_reader )
             {
-                  if ( write( clients[ i ].fd, buf, len ) != (ssize_t)len )
-                        drop_client( i ); /* broken pipe */
+                  ssize_t n = write( clients[ i ].fd, buf, len );
+                  if ( n == -1 )
+                  {
+                        if ( errno == EAGAIN || errno == EWOULDBLOCK )
+                        {
+                              V( "cli#%d skipped (EAGAIN)\n", clients[ i ].fd );
+                              continue; // skip, but don't drop
+                        }
+                        else
+                        {
+                              drop_client( i ); // real error
+                        }
+                  }
+                  else if ( n < (ssize_t)len )
+                  {
+                        V( "cli#%d partial write (%zd/%zu), dropping\n",
+                           clients[ i ].fd, n, len );
+                        drop_client(
+                            i ); // optional: implement buffering instead
+                  }
                   else
+                  {
                         ++fanout;
+                  }
             }
+      }
 
       V( "    → delivered %zu bytes to %zu reader(s)\n", len, fanout );
 }
+// Old one returning EAGAIN socket error on pressure: static void broadcast(
+// const char *buf, size_t len )
+//{
+//      size_t fanout = 0;
+//      for ( int i = 0; i < MAX_CLIENTS; ++i )
+//            if ( clients[ i ].active && clients[ i ].is_reader )
+//            {
+//                  if ( write( clients[ i ].fd, buf, len ) != (ssize_t)len )
+//                        drop_client( i ); /* broken pipe */
+//                  else
+//                        ++fanout;
+//            }
+//
+//      V( "    → delivered %zu bytes to %zu reader(s)\n", len, fanout );
+//}
 
 /* ─────────────────────────── main ────────────────────────── */
 

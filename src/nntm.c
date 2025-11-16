@@ -798,6 +798,8 @@ static void draw_ui( void )
       else if ( selected_index >= scroll_offset + visible_lines )
             scroll_offset = selected_index - visible_lines + 1;
 
+      pthread_mutex_lock( &todo_mutex ); // else causes not all lines to be
+                                         // printed on high stress
       int local_idx = 0;
       for ( int i = 0; i < todo_count; ++i )
       {
@@ -887,6 +889,8 @@ static void draw_ui( void )
             attroff( text_attr );
             ++row;
       }
+      pthread_mutex_unlock( &todo_mutex );
+
       // Fix that it wont go to the very bottom on auto scroll
       if ( auto_scroll_enabled )
       {
